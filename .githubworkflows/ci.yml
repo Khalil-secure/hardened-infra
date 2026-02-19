@@ -1,0 +1,65 @@
+name: Hardened Infra CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-hardening:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Build hardened server image
+        run: docker build -t hardened-server ./hardened-server
+
+      - name: Validate SSH config syntax
+        run: |
+          docker run --rm hardened-server sshd -t -f /etc/ssh/sshd_config
+          echo "PASS: SSH config syntax is valid"
+
+      - name: Check root login disabled
+        run: |
+          config=$(docker run --rm hardened-server cat /etc/ssh/sshd_config)
+          echo "$config" | grep -q "PermitRootLogin no" && echo "PASS: Root login disabled" || (echo "FAIL: Root login not disabled" && exit 1)
+
+      - name: Check custom port
+        run: |
+          config=$(docker run --rm hardened-server cat /etc/ssh/sshd_config)
+          echo "$config" | grep -q "Port 2222" && echo "PASS: Custom port set" || (echo "FAIL: Default port 22 still in use" && exit 1)
+
+      - name: Check password auth disabled
+        run: |
+          config=$(docker run --rm hardened-server cat /etc/ssh/sshd_config)
+          echo "$config" | grep -q "PasswordAuthentication no" && echo "PASS: Password auth disabled" || (echo "FAIL: Password auth still enabled" && exit 1)
+
+      - name: Check MaxAuthTries
+        run: |
+          config=$(docker run --rm hardened-server cat /etc/ssh/sshd_config)
+          echo "$config" | grep -q "MaxAuthTries 3" && echo "PASS: MaxAuthTries set to 3" || (echo "FAIL: MaxAuthTries not hardened" && exit 1)
+
+      - name: Check forwarding disabled
+        run: |
+          config=$(docker run --rm hardened-server cat /etc/ssh/sshd_config)
+          echo "$config" | grep -q "AllowTcpForwarding no" && echo "PASS: TCP forwarding disabled" || (echo "FAIL: TCP forwarding enabled" && exit 1)
+
+      - name: Check Fail2ban config exists
+        run: |
+          docker run --rm hardened-server cat /etc/fail2ban/jail.local | grep -q "enabled.*true" && echo "PASS: Fail2ban jail configured" || (echo "FAIL: Fail2ban not configured" && exit 1)
+
+      - name: Security summary
+        run: |
+          echo "================================"
+          echo "  HARDENING VALIDATION PASSED  "
+          echo "================================"
+          echo "All security controls verified:"
+          echo "  - Root login disabled"
+          echo "  - Custom SSH port"
+          echo "  - Password auth disabled"
+          echo "  - MaxAuthTries limited"
+          echo "  - Forwarding disabled"
+          echo "  - Fail2ban configured"
