@@ -1,0 +1,12 @@
+Port 2222
+PermitRootLogin no
+MaxAuthTries 3
+LoginGraceTime 30
+PasswordAuthentication no
+AllowTcpForwarding no
+X11Forwarding no
+SyslogFacility AUTH
+LogLevel VERBOSE
+PrintMotd no
+UsePAM yes
+Subsystem sftp /usr/lib/openssh/sftp-server
