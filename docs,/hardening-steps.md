@@ -210,4 +210,3 @@ Mounted to hardened-server as read-write, to monitor as read-only.
 
 5. **Obstacles are documentation** — every wall hit is evidence of 
    real hands-on experience, not just following a guide.
-```

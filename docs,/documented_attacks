@@ -1,0 +1,119 @@
+# Attack Simulation & Detection
+
+Documentation of live attack tests performed against the hardened server
+and how each security layer responded.
+
+---
+
+## Environment
+- Attacker: localhost (::1) inside the container
+- Target: hardened-server on port 2222
+- Monitoring: tail -f /var/log/auth.log and fail2ban.log
+
+---
+
+## Test 1 — Root Login Attempt
+
+**Attack:**
+```bash
+ssh root@localhost -p 2222
+```
+
+**Expected:** Denied
+**Result:** 
+```
+Connection closed by authenticating user root
+```
+**Control that stopped it:** `PermitRootLogin no` in sshd_config
+
+---
+
+## Test 2 — Brute Force Attack
+
+**Attack:** 3 consecutive failed password attempts against root
+
+**auth.log captured:**
+```
+Failed password for root from ::1 port 59770 ssh2
+error: maximum authentication attempts exceeded for root
+Disconnecting authenticating user root: Too many authentication failures
+```
+
+**fail2ban.log captured:**
+```
+[sshd] Found ::1
+[sshd] Found ::1
+[sshd] Found ::1
+[sshd] Ban ::1
+```
+
+**Result:** IP banned for 1 hour after 3 attempts
+**Control that stopped it:** Fail2ban sshd jail
+
+---
+
+## Test 3 — Password Authentication Attempt
+
+**Attack:**
+```bash
+ssh secuser@localhost -p 2222
+# entered correct password
+```
+
+**Result:**
+```
+Permission denied (publickey)
+```
+Password rejected entirely — server doesn't even process it.
+**Control that stopped it:** `PasswordAuthentication no`
+
+---
+
+## Test 4 — File Integrity Violation
+
+**Attack:** Modified /etc/passwd directly
+```bash
+echo "" >> /etc/passwd
+```
+
+**file-monitor.log captured:**
+```
+/etc/passwd MODIFY
+```
+
+**Result:** Modification detected and logged instantly
+**Control that caught it:** inotifywait file integrity monitor
+
+---
+
+## Test 5 — Centralized Log Visibility
+
+**Verified:** Monitor container reading hardened-server logs in real time
+
+```bash
+docker exec monitor tail -f /monitored-logs/auth.log
+```
+
+Every attack from Tests 1-4 visible from the monitor container
+without being logged into the hardened server.
+
+---
+
+## Summary
+
+| Attack | Control | Result |
+|---|---|---|
+| Root SSH login | PermitRootLogin no | Blocked |
+| Brute force (3 attempts) | Fail2ban | IP Banned |
+| Password auth attempt | PasswordAuthentication no | Rejected |
+| Critical file modification | inotifywait | Detected & Logged |
+| Log visibility | Shared Docker volume | Monitor sees everything |
+
+---
+
+## Conclusion
+
+Every attack was either blocked or detected. The layered security 
+approach means no single point of failure — if one control misses 
+something, the next layer catches it. This is defense in depth.
+

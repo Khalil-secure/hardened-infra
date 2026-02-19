@@ -1,0 +1,39 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install required packages
+RUN apt-get update && apt-get install -y \
+    openssh-server \
+    fail2ban \
+    rsyslog \
+    inotify-tools \
+    nano \
+    net-tools \
+    iputils-ping \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy hardened SSH config
+COPY sshd_config /etc/ssh/sshd_config
+
+# Copy Fail2ban jail config
+COPY fail2ban-jail.local /etc/fail2ban/jail.local
+
+# Generate SSH host keys
+RUN ssh-keygen -A
+
+# Create unprivileged user
+RUN useradd -m -s /bin/bash secuser
+
+# Fix log file permissions
+RUN touch /var/log/auth.log /var/log/syslog && \
+    chmod 666 /var/log/auth.log /var/log/syslog
+
+# Startup script
+COPY scripts/start.sh /start.sh
+RUN chmod +x /start.sh
+
+EXPOSE 2222
+
+CMD ["/start.sh"]
