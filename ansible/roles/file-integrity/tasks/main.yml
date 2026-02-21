@@ -1,0 +1,29 @@
+---
+- name: Install inotify-tools
+  apt:
+    name: inotify-tools
+    state: present
+    update_cache: yes
+
+- name: Create file-monitor log
+  file:
+    path: /var/log/file-monitor.log
+    state: touch
+    owner: root
+    mode: '0644'
+  changed_when: false
+
+- name: Deploy file monitor script
+  copy:
+    src: file-monitor.sh
+    dest: /usr/local/bin/file-monitor.sh
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Start file integrity monitor
+  shell: setsid /usr/local/bin/file-monitor.sh &
+  async: 10
+  poll: 0
+  ignore_errors: yes
+  changed_when: false

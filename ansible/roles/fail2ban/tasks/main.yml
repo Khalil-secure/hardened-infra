@@ -1,0 +1,30 @@
+---
+- name: Install Fail2ban and rsyslog
+  apt:
+    name:
+      - fail2ban
+      - rsyslog
+    state: present
+    update_cache: yes
+
+- name: Create auth.log if missing
+  file:
+    path: /var/log/auth.log
+    state: touch
+    owner: root
+    mode: '0666'
+  changed_when: false
+
+- name: Deploy Fail2ban jail config
+  copy:
+    src: jail.local
+    dest: /etc/fail2ban/jail.local
+    owner: root
+    group: root
+    mode: '0644'
+  notify: restart fail2ban
+
+- name: Start Fail2ban
+  service:
+    name: fail2ban
+    state: started
