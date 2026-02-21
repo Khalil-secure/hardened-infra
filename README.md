@@ -1,4 +1,5 @@
-> 🇬🇧 [English version available here](README.md)
+> 🇫🇷 [Version française disponible ici](README.fr.md)
+
 # 🔒 Hardened Infrastructure Lab
 
 > A hands-on security engineering project — building, breaking, and documenting a production-grade hardened environment from scratch.

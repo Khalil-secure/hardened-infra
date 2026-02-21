@@ -1,4 +1,5 @@
-> 🇫🇷 [Version française disponible ici](README.fr.md)
+> 🇬🇧 [English version available here](README.md)
+
 # 🔒 Laboratoire d'Infrastructure Sécurisée
 
 > Un projet d'ingénierie sécurité construit de zéro — durcissement, tests d'intrusion, et documentation complète d'un environnement de production sécurisé.
