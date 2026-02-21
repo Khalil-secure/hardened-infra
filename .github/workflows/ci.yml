@@ -19,7 +19,7 @@ jobs:
 
       - name: Validate SSH config syntax
         run: |
-          docker run --rm hardened-server sshd -t -f /etc/ssh/sshd_config
+          docker run --rm hardened-server bash -c "mkdir -p /run/sshd && sshd -t -f /etc/ssh/sshd_config"
           echo "PASS: SSH config syntax is valid"
 
       - name: Check root login disabled
