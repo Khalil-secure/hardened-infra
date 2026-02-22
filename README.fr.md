@@ -23,8 +23,8 @@ Chaque étape est documentée avec les obstacles réels rencontrés et la façon
 
 ```
 Phase 1 ✅  Serveur Durci + Monitoring
-Phase 2 🔄  Automatisation Ansible
-Phase 3 ⏳  SOC Home Lab (ELK + Suricata)
+Phase 2 ✅  Automatisation Ansible
+Phase 3 ✅  SOC Home Lab (ELK + Suricata)
 Phase 4 ⏳  Red Team Lab (Simulation d'attaques)
 ```
 

@@ -1,0 +1,58 @@
+---
+- name: Deploy full SOC lab environment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  tasks:
+    - name: Create hardened-net network
+      community.docker.docker_network:
+        name: hardened-net
+        state: present
+
+    - name: Create hardened-logs volume
+      community.docker.docker_volume:
+        name: hardened-logs
+        state: present
+
+    - name: Start ansible-target container
+      community.docker.docker_container:
+        name: ansible-target
+        image: ubuntu:22.04
+        state: started
+        networks:
+          - name: hardened-net
+        volumes:
+          - hardened-logs:/var/log
+        command: sleep infinity
+
+    - name: Start Loki container
+      community.docker.docker_container:
+        name: loki
+        image: grafana/loki:latest
+        state: started
+        networks:
+          - name: hardened-net
+        published_ports:
+          - "3100:3100"
+
+    - name: Start Grafana container
+      community.docker.docker_container:
+        name: grafana
+        image: grafana/grafana:latest
+        state: started
+        networks:
+          - name: hardened-net
+        published_ports:
+          - "3000:3000"
+
+    - name: Start Promtail container
+      community.docker.docker_container:
+        name: promtail
+        image: grafana/promtail:latest
+        state: started
+        networks:
+          - name: hardened-net
+        volumes:
+          - hardened-logs:/var/log/hardened:ro
+          - /ansible/promtail-config.yml:/etc/promtail/config.yml

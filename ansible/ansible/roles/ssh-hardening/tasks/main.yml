@@ -1,0 +1,22 @@
+---
+- name: Install OpenSSH server
+  apt:
+    name: openssh-server
+    state: present
+    update_cache: yes
+
+- name: Deploy hardened sshd_config
+  copy:
+    src: sshd_config
+    dest: /etc/ssh/sshd_config
+    owner: root
+    group: root
+    mode: '0644'
+    backup: yes
+  notify: restart ssh
+
+- name: Ensure /run/sshd exists
+  file:
+    path: /run/sshd
+    state: directory
+    mode: '0755'

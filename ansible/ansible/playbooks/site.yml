@@ -1,0 +1,8 @@
+---
+- name: Harden target server
+  hosts: all
+  become: yes
+  roles:
+    - ssh-hardening
+    - fail2ban
+    - file-integrity

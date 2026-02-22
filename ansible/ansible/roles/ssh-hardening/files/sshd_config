@@ -1,0 +1,23 @@
+# Hardened SSH Configuration
+# Managed by Ansible — do not edit manually
+
+Port 2222
+AddressFamily any
+ListenAddress 0.0.0.0
+
+PermitRootLogin no
+MaxAuthTries 3
+LoginGraceTime 30
+PasswordAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+X11Forwarding no
+AllowTcpForwarding no
+PrintMotd no
+UsePAM yes
+LogLevel VERBOSE
+SyslogFacility AUTH
+
+AcceptEnv LANG LC_*
+Subsystem sftp /usr/lib/openssh/sftp-server
