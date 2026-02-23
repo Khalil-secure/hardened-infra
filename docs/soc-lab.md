@@ -13,38 +13,38 @@ Chaque étape est reproductible depuis zéro en suivant ce guide.
 │                                                                  │
 │  ┌─────────────────┐    ┌──────────┐    ┌────────────────────┐  │
 │  │  ansible-target  │    │ promtail │    │       loki         │  │
-│  │  172.18.0.2      │───►│          │───►│  172.18.0.x:3100   │  │
+│  │  172.18.0.3      │───►│          │───►│  172.18.0.x:3100   │  │
 │  │  SSH :2222       │    │ watches  │    │  log aggregation   │  │
 │  │  Fail2ban        │    │ auth.log │    └────────────────────┘  │
 │  │  inotifywait     │    └──────────┘             │              │
 │  └─────────────────┘                              ▼              │
 │                                         ┌────────────────────┐  │
-│  ┌─────────────────┐                    │      grafana        │  │
-│  │ ansible-control  │                   │  172.18.0.x:3000   │  │
-│  │  runs playbooks  │                   │  SOC dashboard     │  │
-│  └─────────────────┘                    └────────────────────┘  │
-│                                                                  │
-│  shared volume: hardened-logs (/var/log)                        │
+│  ┌─────────────────┐    ┌──────────┐    │      grafana        │  │
+│  │ ansible-control  │    │suricata  │   │  172.18.0.x:3000   │  │
+│  │  runs playbooks  │    │172.18.0.2│   │  SOC dashboard     │  │
+│  └─────────────────┘    │48716 règles│  └────────────────────┘  │
+│                         └──────────┘                            │
+│  volume partagé: hardened-logs (/var/log)                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Log Pipeline
+### Pipeline de Logs
 
 ```
 ansible-target
-  └── /var/log/auth.log (SSH events, brute force, bans)
-  └── /var/log/fail2ban.log (Fail2ban bans)
-  └── /var/log/file-monitor.log (file integrity events)
+  └── /var/log/auth.log       (événements SSH, brute force, bannissements)
+  └── /var/log/fail2ban.log   (bannissements Fail2ban)
+  └── /var/log/file-monitor.log (événements intégrité fichiers)
         │
-        │ (shared via hardened-logs Docker volume)
+        │ (partagé via volume Docker hardened-logs)
         ▼
     promtail
-        │ ships logs to
+        │ envoie les logs vers
         ▼
-      loki (log aggregation)
-        │ queried by
+      loki (agrégation de logs)
+        │ interrogé par
         ▼
-    grafana (SOC dashboard at http://localhost:3000)
+    grafana (dashboard SOC sur http://localhost:3000)
 ```
 
 ---
@@ -404,11 +404,7 @@ Résultat attendu : `changed=0 unreachable=0 failed=0`
 
 ### Étape 11 — Lancer la stack SOC (Loki + Grafana + Promtail)
 
-Créer la config Promtail localement :
-
-```powershell
-# Contenu à sauvegarder dans hardened-infra/promtail-config.yml
-```
+Créer le fichier `promtail-config.yml` dans le dossier du projet :
 
 ```yaml
 server:
@@ -446,7 +442,7 @@ docker run -d --name grafana `
   -p 3000:3000 `
   grafana/grafana:latest
 
-# Promtail
+# Promtail — monter le fichier de config directement
 docker run -d --name promtail `
   --network hardened-net `
   -v hardened-logs:/var/log/hardened:ro `
@@ -454,11 +450,13 @@ docker run -d --name promtail `
   grafana/promtail:latest
 ```
 
+> ⚠️ Ne pas passer de flag `--config.file` ou `-config.file` en argument — monter le fichier directement à `/etc/promtail/config.yml` suffit. Promtail le charge automatiquement.
+
 ---
 
 ### Étape 12 — Connecter Loki à Grafana
 
-1. Ouvrir `http://localhost:3000` (admin/admin)
+1. Ouvrir `http://localhost:3000` (admin / admin)
 2. **Connections** → **Add new connection** → **Loki**
 3. URL : `http://loki:3100`
 4. **Save & test** → "Data source successfully connected"
@@ -471,9 +469,41 @@ docker run -d --name promtail `
 docker exec ansible-target bash -c "rsyslogd && chmod 666 /var/log/auth.log"
 ```
 
+> Sans cette étape, auth.log reste vide — les événements SSH ne sont pas journalisés.
+
 ---
 
-### Étape 14 — Créer le dashboard SOC
+### Étape 14 — Déployer Suricata (IDS réseau)
+
+```powershell
+docker run -d --name suricata `
+  --network hardened-net `
+  --cap-add NET_ADMIN `
+  --cap-add NET_RAW `
+  -v hardened-logs:/var/log/suricata `
+  jasonish/suricata:latest `
+  -i eth0
+```
+
+Charger les règles ET/Open (48 716 règles de détection) :
+
+```powershell
+docker exec suricata suricata-update enable-source et/open
+docker exec suricata suricata-update
+docker exec suricata kill -USR2 1
+```
+
+Vérifier le chargement :
+
+```powershell
+docker exec suricata tail /var/log/suricata/suricata.log
+```
+
+Résultat attendu : `48716 rules successfully loaded`
+
+---
+
+### Étape 15 — Créer le dashboard SOC dans Grafana
 
 Dans Grafana → **Dashboards** → **New Dashboard** → ajouter ces panels :
 
@@ -499,7 +529,7 @@ Sauvegarder sous : **"Hardened Server SOC"**
 
 ---
 
-### Étape 15 — Simuler une attaque et vérifier la détection
+### Étape 16 — Simuler une attaque et vérifier la détection
 
 ```powershell
 for ($i=1; $i -le 10; $i++) {
@@ -507,7 +537,42 @@ for ($i=1; $i -le 10; $i++) {
 }
 ```
 
-Observer le spike sur le dashboard Grafana — preuve que le pipeline fonctionne.
+Observer le spike sur le panel "Failed logins per minute" dans Grafana — preuve que le pipeline fonctionne de bout en bout.
+
+---
+
+## Suricata — Décision d'Architecture et Limitation Documentée
+
+### Ce qui fonctionne
+
+- Suricata déployé et opérationnel sur `eth0`
+- 48 716 règles ET/Open chargées et actives
+- Logs disponibles dans `/var/log/suricata/eve.json`
+- Trafic réseau capturé entre conteneurs visible dans `eve.json`
+
+### Limitation rencontrée
+
+Dans un réseau bridge Docker, le trafic inter-conteneurs est traité au niveau du **kernel bridge Linux** — en dessous de l'interface réseau surveillée par Suricata. Les scans nmap et attaques SSH entre conteneurs ne génèrent pas d'alertes dans `fast.log` car les paquets n'empruntent pas `eth0`.
+
+```
+ansible-control → kernel bridge → ansible-target
+                       ↑
+              Suricata ne voit pas ce trafic
+              il surveille uniquement eth0
+```
+
+### Solution en production
+
+En environnement de production, Suricata est déployé :
+- Sur l'interface réseau de l'hôte (mode `--net=host`)
+- Sur une interface **macvlan** dédiée
+- En mode **IPS inline** — tout le trafic passe obligatoirement par Suricata
+
+### Plan Phase 4 (AWS EC2)
+
+Sur une instance EC2, l'accès complet au kernel permet de configurer une interface tap réseau réelle. Suricata y détectera tout le trafic inter-conteneurs en temps réel, y compris les scans MITRE ATT&CK T1046.
+
+> Documenter cette contrainte démontre une compréhension approfondie de l'architecture réseau — au-delà de la configuration superficielle.
 
 ---
 
@@ -515,14 +580,17 @@ Observer le spike sur le dashboard Grafana — preuve que le pipeline fonctionne
 
 | Obstacle | Cause | Solution |
 |---|---|---|
-| Ansible locked out after hardening | `PermitRootLogin no` bloquait Ansible | Créer un user `ansible` dédié avec sudo |
+| Ansible bloqué après durcissement | `PermitRootLogin no` coupait l'accès | Créer un user `ansible` dédié avec sudo |
 | `changed_when: false` nécessaire | `touch` toujours compté comme changed | Ajouter `changed_when: false` |
-| Promtail flag error | `--config.file` vs `-config.file` | Monter le config file directement via volume |
-| Auth.log vide | rsyslog pas démarré | `rsyslogd && chmod 666 /var/log/auth.log` |
-| Volume wrong path | promtail regardait le mauvais path | Recréer avec `-v hardened-logs:/var/log/hardened:ro` |
-| SSH host key changed | Nouveau conteneur = nouvelle clé | `ssh-keygen -R 172.18.0.2` + `StrictHostKeyChecking=no` |
-| Port 2222 après hardening | Inventaire pointait encore port 22 | Mettre à jour `ansible_port: 2222` dans hosts.yml |
-| inotifywait tué par Ansible | Ansible kill ses child processes | Utiliser `setsid` + `async/poll: 0` |
+| Erreur flag Promtail | `--config.file` refusé en argument Docker | Monter le fichier config directement via volume |
+| Auth.log vide | rsyslog pas démarré dans le conteneur | `rsyslogd && chmod 666 /var/log/auth.log` |
+| Mauvais path volume Promtail | Promtail regardait `/var/log` au lieu de `/var/log/hardened` | Recréer avec `-v hardened-logs:/var/log/hardened:ro` |
+| SSH host key changed | Nouveau conteneur = nouvelle clé hôte | `ssh-keygen -R 172.18.0.2` + `StrictHostKeyChecking=no` |
+| Port 2222 après durcissement | Inventaire pointait encore port 22 | Mettre à jour `ansible_port: 2222` dans hosts.yml |
+| inotifywait tué par Ansible | Ansible termine ses processus enfants | Utiliser `setsid` + `async: 10, poll: 0` |
+| Suricata sans règles | Source ET/Open non activée | `suricata-update enable-source et/open` puis `suricata-update` |
+| Suricata n'alerte pas sur scans locaux | Trafic bridge Docker invisible pour eth0 | Limitation documentée — solution prévue sur AWS EC2 en Phase 4 |
+| IP dupliquée après rebuild conteneur | Docker réassigne la même IP | Vérifier avec `docker inspect` + `ssh-keygen -R` si nécessaire |
 
 ---
 
@@ -531,5 +599,8 @@ Observer le spike sur le dashboard Grafana — preuve que le pipeline fonctionne
 1. **Ne jamais automatiser en root** — toujours un user dédié avec sudo scopé
 2. **Les volumes Docker sont la clé** — partager les logs entre conteneurs via volume nommé
 3. **Idempotence** — un bon playbook Ansible donne `changed=0` à la deuxième exécution
-4. **Tester chaque couche séparément** — pipeline = plusieurs points de défaillance possibles
-5. **Documenter les obstacles** — chaque erreur est une preuve d'expérience réelle
+4. **Tester chaque couche séparément** — un pipeline = plusieurs points de défaillance possibles
+5. **rsyslog doit tourner** — sans lui, auth.log reste vide et tout le pipeline est aveugle
+6. **Les flags CLI varient** — Promtail, Suricata, Ansible ont chacun leurs conventions
+7. **L'architecture réseau est critique** — le bridge Docker limite l'inspection de paquets en profondeur
+8. **Documenter les obstacles** — chaque erreur rencontrée prouve une expérience pratique réelle

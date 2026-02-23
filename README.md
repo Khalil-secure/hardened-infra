@@ -1,5 +1,4 @@
 > 🇫🇷 [Version française disponible ici](README.fr.md)
-
 # 🔒 Hardened Infrastructure Lab
 
 > A hands-on security engineering project — building, breaking, and documenting a production-grade hardened environment from scratch.
@@ -23,14 +22,14 @@ Every step is documented with real obstacles hit and how they were solved. This 
 
 ```
 Phase 1 ✅  Hardened Server + Monitoring
-Phase 2 🔄  Ansible Automation
-Phase 3 ⏳  SOC Home Lab (ELK + Suricata)
-Phase 4 ⏳  Red Team Lab (Attack simulation)
+Phase 2 ✅  Ansible Automation
+Phase 3 ✅  SOC Home Lab (Loki + Grafana + Promtail + Suricata)
+Phase 4 ⏳  Red Team Lab (Attack simulation on AWS)
 ```
 
 ---
 
-## ✅ Phase 1 — Hardened Server & Monitoring (Complete)
+## ✅ Phase 1 — Hardened Server & Monitoring
 
 ### Architecture
 
@@ -47,32 +46,18 @@ Phase 4 ⏳  Red Team Lab (Attack simulation)
            │                                    │
            └──────────── hardened-net ──────────┘
                     (private bridge network)
-                      172.20.0.0/24
 ```
 
-### Security Layers Implemented
+### Security Layers
 
-| Layer | Tool | What it does |
+| Layer | Tool | Protection |
 |---|---|---|
-| SSH Hardening | sshd_config | Custom port, no root, keys only, strict limits |
+| SSH Hardening | sshd_config | Custom port, no root, keys only |
 | Brute Force Protection | Fail2ban | Bans IPs after 3 failed attempts |
-| File Integrity Monitoring | inotifywait | Detects any change to critical files |
-| Centralized Logging | rsyslog + Docker volume | All logs readable from monitor container |
+| File Integrity Monitoring | inotifywait | Detects changes to critical files |
+| Centralized Logging | rsyslog + Docker volume | All logs readable from monitor |
 | Real-time Monitoring | Netdata | Live dashboard at port 19999 |
-| CI/CD Validation | GitHub Actions | Auto-validates all security controls on push |
-
-### SSH Hardening Config
-
-```
-Port 2222                    # Avoids automated bot scanners
-PermitRootLogin no           # Root cannot SSH in
-MaxAuthTries 3               # Cuts off brute force
-LoginGraceTime 30            # No slow/idle attacks
-PasswordAuthentication no    # Keys only
-AllowTcpForwarding no        # No traffic tunneling
-X11Forwarding no             # No GUI tunneling
-LogLevel VERBOSE             # Full forensic logging
-```
+| CI/CD Validation | GitHub Actions | Auto-validates security controls on push |
 
 ### Attack Simulation Results
 
@@ -82,132 +67,142 @@ LogLevel VERBOSE             # Full forensic logging
 | Brute force (3 attempts) | Fail2ban | 🚫 IP Banned |
 | Password auth attempt | PasswordAuthentication no | ❌ Rejected |
 | Critical file modification | inotifywait | 🔔 Detected & Logged |
-| Log visibility from monitor | Shared Docker volume | ✅ Full visibility |
-
-### How to Run Phase 1
-
-```bash
-# Create network and volume
-docker network create hardened-net
-docker volume create hardened-logs
-
-# Run hardened server
-docker run -d --name hardened-server \
-  --network hardened-net \
-  -p 2222:2222 \
-  -v hardened-logs:/var/log \
-  hardened-server:v1 bash
-
-# Run monitor
-docker run -d --name monitor \
-  --network hardened-net \
-  -p 19999:19999 \
-  -v hardened-logs:/monitored-logs:ro \
-  netdata/netdata
-
-# Access Netdata dashboard
-open http://localhost:19999
-```
 
 ---
 
-## 🔄 Phase 2 — Ansible Automation (In Progress)
+## ✅ Phase 2 — Ansible Automation
 
-### Goal
-Eliminate all manual configuration. One command rebuilds the entire hardened environment from zero.
+### What it does
 
-### Planned Playbooks
+One command rebuilds the entire hardened environment from zero:
+
+```bash
+ansible-playbook playbooks/site.yml
+```
+
+### Roles
 
 ```
 ansible/
-├── inventory/
-│   └── hosts.yml              # Container inventory
+├── inventory/hosts.yml          # Target server inventory
+├── ansible.cfg                  # Roles path + defaults
 ├── playbooks/
-│   ├── harden.yml             # Full hardening sequence
-│   ├── deploy-fail2ban.yml    # Fail2ban setup and config
-│   ├── deploy-monitoring.yml  # Netdata + log shipping
-│   └── site.yml               # Master playbook (runs all)
+│   └── site.yml                 # Master playbook
 └── roles/
-    ├── ssh-hardening/         # SSH config role
-    ├── fail2ban/              # IDS role
-    └── file-integrity/        # inotifywait role
+    ├── ssh-hardening/           # Deploys hardened sshd_config
+    ├── fail2ban/                # Installs + configures Fail2ban
+    └── file-integrity/          # inotifywait file monitor
 ```
 
-### Target Command
+### Key Lessons from Phase 2
 
-```bash
-# Entire hardened infrastructure in one command
-ansible-playbook -i inventory/hosts.yml playbooks/site.yml
+- **Never automate as root** — dedicated ansible user with scoped sudo
+- **Idempotency** — changed=0 on second run = production ready
+- **Deploy full config files** instead of patching line by line
+- **Port changes break connectivity** — update inventory after SSH hardening
+
+---
+
+## ✅ Phase 3 — SOC Home Lab
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      hardened-net                               │
+│                                                                  │
+│  ┌─────────────────┐    ┌──────────┐    ┌────────────────────┐  │
+│  │  ansible-target  │    │ promtail │    │       loki         │  │
+│  │  SSH :2222       │───►│          │───►│  log aggregation   │  │
+│  │  Fail2ban        │    │ watches  │    └────────────────────┘  │
+│  │  inotifywait     │    │ auth.log │             │              │
+│  └─────────────────┘    └──────────┘             ▼              │
+│                                         ┌────────────────────┐  │
+│  ┌─────────────────┐                    │      grafana        │  │
+│  │    suricata      │                   │  SOC dashboard     │  │
+│  │  48,716 rules    │                   │  port 3000         │  │
+│  │  network IDS     │                   └────────────────────┘  │
+│  └─────────────────┘                                            │
+│  shared volume: hardened-logs                                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Log Pipeline
+
+```
+ansible-target → /var/log/auth.log → promtail → loki → grafana
+```
+
+### SOC Stack
+
+| Tool | Role | Port |
+|---|---|---|
+| Loki | Log aggregation | 3100 |
+| Grafana | SOC dashboard | 3000 |
+| Promtail | Log shipping agent | 9080 |
+| Suricata | Network IDS (48,716 ET/Open rules) | — |
+
+### Grafana Dashboard Queries
+
+```
+# Live log stream
+{job="hardened-server"}
+
+# Failed logins per minute
+count_over_time({job="hardened-server"} |= "Failed" [1m])
+
+# Fail2ban bans
+{job="hardened-server"} |= "Ban"
+```
+
+### Architecture Decision — Suricata Network Tap
+
+Suricata was deployed with 48,716 ET/Open rules loaded and successfully running on eth0. In Docker bridge networking, inter-container traffic is processed at the kernel bridge level — below the interface Suricata monitors.
+
+**Production solution:** Suricata runs on the host network interface or a dedicated macvlan tap. This is planned for Phase 4 on AWS EC2 where full network control is available.
+
+> Documenting this constraint demonstrates understanding of network architecture beyond surface-level configuration.
+
+### How to Run Phase 3
+
+```powershell
+# Loki
+docker run -d --name loki --network hardened-net -p 3100:3100 grafana/loki:latest
+
+# Grafana
+docker run -d --name grafana --network hardened-net -p 3000:3000 grafana/grafana:latest
+
+# Promtail
+docker run -d --name promtail \
+  --network hardened-net \
+  -v hardened-logs:/var/log/hardened:ro \
+  -v ./promtail-config.yml:/etc/promtail/config.yml \
+  grafana/promtail:latest
+
+# Suricata
+docker run -d --name suricata \
+  --network hardened-net \
+  --cap-add NET_ADMIN --cap-add NET_RAW \
+  -v hardened-logs:/var/log/suricata \
+  jasonish/suricata:latest -i eth0
+
+# Load rules
+docker exec suricata suricata-update enable-source et/open
+docker exec suricata suricata-update
 ```
 
 ---
 
-## ⏳ Phase 3 — SOC Home Lab
+## ⏳ Phase 4 — Red Team Lab (AWS)
 
-### Goal
-Add a full Security Operations Center stack on top of the hardened infrastructure — real-time threat detection, alert correlation, and MITRE ATT&CK coverage.
+### Why AWS
 
-### Planned Architecture
-
-```
-┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│  hardened-server │    │    suricata-ids   │    │   elk-stack      │
-│  (Phase 1)       │───►│  Network IDS/IPS  │───►│  Elasticsearch   │
-│                  │    │  MITRE ATT&CK     │    │  Logstash        │
-│                  │    │  rules            │    │  Kibana          │
-└──────────────────┘    └──────────────────┘    └──────────────────┘
-                                                         │
-                                               ┌──────────────────┐
-                                               │   alert-engine   │
-                                               │  Threat hunting  │
-                                               │  SOC dashboard   │
-                                               └──────────────────┘
-```
-
-### Planned Stack
-
-| Tool | Role |
-|---|---|
-| Suricata | Network IDS/IPS with MITRE ATT&CK rules |
-| Elasticsearch | Log storage and indexing |
-| Logstash | Log ingestion and parsing pipeline |
-| Kibana | SOC dashboard and visualization |
-| Custom rules | Mapped to MITRE ATT&CK framework |
-
----
-
-## ⏳ Phase 4 — Red Team Lab
-
-### Goal
-Build an isolated attack simulation environment to test defenses, understand attacker techniques, and generate real alerts in the SOC.
-
-### Planned Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  ISOLATED LAB NETWORK                │
-│                                                      │
-│  ┌─────────────┐         ┌─────────────────────┐    │
-│  │  kali-linux │────────►│   hardened-server   │    │
-│  │  attacker   │         │   (target/defender) │    │
-│  └─────────────┘         └─────────────────────┘    │
-│         │                          │                 │
-│         │              ┌───────────────────────┐     │
-│         └─────────────►│      SOC Stack        │     │
-│                        │   (Phase 3 — monitor) │     │
-│                        └───────────────────────┘     │
-└─────────────────────────────────────────────────────┘
-```
-
-### Planned Attack Scenarios
-
-- Reconnaissance — nmap scanning, service enumeration
-- Brute force — SSH attacks, triggering Fail2ban
-- Privilege escalation attempts — monitored by file integrity
-- Lateral movement simulation — network pivoting
-- All attacks visible in real-time on SOC dashboard
-
-> ⚠️ All attacks are performed exclusively in this isolated lab environment on infrastructure I own and control.
+Local Docker networking limits full network traffic inspection. Phase 4 moves to AWS EC2 where:
+- Full kernel network access for Suricata tap interface
+- Terraform provisions everything reproducibly
+- Kali Linux attacker with full capabilities
+- MITRE ATT&CK simulation (T1021, T1046, T1190)
+- All alerts visible in real-time on Grafana SOC dashboard
 
 ---
 
@@ -215,43 +210,51 @@ Build an isolated attack simulation environment to test defenses, understand att
 
 ```
 hardened-infra/
-├── .github/
-│   └── workflows/
-│       └── ci.yml              # GitHub Actions pipeline
+├── .github/workflows/ci.yml
 ├── hardened-server/
-│   ├── Dockerfile              # Hardened Ubuntu image
-│   ├── sshd_config             # Hardened SSH config
-│   ├── fail2ban-jail.local     # Fail2ban configuration
-│   └── scripts/
-│       └── start.sh            # Container startup script
-├── docs/
-│   ├── hardening-steps.md      # Step-by-step with real obstacles
-│   └── attack-simulation.md   # Live attack test results
-└── README.md
+│   ├── Dockerfile
+│   ├── sshd_config
+│   ├── fail2ban-jail.local
+│   └── scripts/start.sh
+├── ansible/
+│   ├── ansible.cfg
+│   ├── inventory/hosts.yml
+│   ├── playbooks/site.yml
+│   └── roles/
+│       ├── ssh-hardening/
+│       ├── fail2ban/
+│       └── file-integrity/
+├── promtail-config.yml
+└── docs/
+    ├── hardening-steps.md
+    ├── attack-simulation.md
+    └── soc-lab.md
 ```
 
 ---
 
 ## 📚 Documentation
 
-- [Hardening Steps & Lessons Learned](docs/hardening-steps.md) — every wall hit and how it was solved
-- [Attack Simulation Results](docs/attack-simulation.md) — live brute force tests and IDS responses
+- [Hardening Steps & Lessons Learned](docs/hardening-steps.md)
+- [Attack Simulation Results](docs/attack-simulation.md)
+- [SOC Lab Complete Guide](docs/soc-lab.md)
 
 ---
 
-## 🧠 Key Lessons Learned
+## 🧠 Key Lessons
 
-1. **Containers are not VMs** — auditd, systemd, kernel modules behave differently. Know your environment.
-2. **Logs are everything** — Fail2ban is useless without working log infrastructure.
-3. **Always verify with netstat** — don't assume a service is secure, check what's actually listening.
-4. **Test your hardening** — actively try to break in and verify each control works.
-5. **Obstacles are documentation** — every wall hit is evidence of real hands-on experience.
+1. **Containers ≠ VMs** — kernel modules behave differently
+2. **Logs are everything** — Fail2ban is useless without log infrastructure
+3. **Never automate as root** — dedicated service accounts with scoped sudo
+4. **Idempotency matters** — changed=0 every time = production ready
+5. **Network architecture is critical** — Docker bridge limits packet inspection
+6. **Document the obstacles** — every wall hit proves real experience
 
 ---
 
 ## 🛠️ Tech Stack
 
-`Docker` `Ubuntu 22.04` `Fail2ban` `Netdata` `rsyslog` `inotifywait` `GitHub Actions` `Ansible (Phase 2)` `Suricata (Phase 3)` `ELK Stack (Phase 3)` `Kali Linux (Phase 4)`
+`Docker` `Ubuntu 22.04` `Fail2ban` `Netdata` `rsyslog` `inotifywait` `GitHub Actions` `Ansible` `Suricata` `Loki` `Grafana` `Promtail`
 
 ---
 
@@ -260,4 +263,4 @@ hardened-infra/
 **Khalil Ghiati** — Infrastructure & Security Engineer
 
 [![GitHub](https://img.shields.io/badge/GitHub-Khalil--secure-181717?logo=github)](https://github.com/Khalil-secure)
-[![Portfolio](https://img.shields.io/badge/Portfolio-khalilghiati.dev-0F4C81)](https://portfolio-khalil-secure.vercel.app/)
+[![Portfolio](https://img.shields.io/badge/Portfolio-khalilghiati.dev-0F4C81)](https://khalilghiati.dev)

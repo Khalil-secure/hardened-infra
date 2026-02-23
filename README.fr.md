@@ -24,13 +24,13 @@ Chaque étape est documentée avec les obstacles réels rencontrés et la façon
 ```
 Phase 1 ✅  Serveur Durci + Monitoring
 Phase 2 ✅  Automatisation Ansible
-Phase 3 ✅  SOC Home Lab (ELK + Suricata)
-Phase 4 ⏳  Red Team Lab (Simulation d'attaques)
+Phase 3 ✅  SOC Home Lab (Loki + Grafana + Promtail + Suricata)
+Phase 4 ⏳  Red Team Lab (Simulation d'attaques sur AWS)
 ```
 
 ---
 
-## ✅ Phase 1 — Serveur Durci & Monitoring (Terminée)
+## ✅ Phase 1 — Serveur Durci & Monitoring
 
 ### Architecture
 
@@ -47,32 +47,18 @@ Phase 4 ⏳  Red Team Lab (Simulation d'attaques)
            │                                    │
            └──────────── hardened-net ──────────┘
                     (réseau bridge privé)
-                      172.20.0.0/24
 ```
 
-### Couches de Sécurité Implémentées
+### Couches de Sécurité
 
-| Couche | Outil | Rôle |
+| Couche | Outil | Protection |
 |---|---|---|
-| Durcissement SSH | sshd_config | Port custom, pas de root, clés uniquement, limites strictes |
+| Durcissement SSH | sshd_config | Port custom, pas de root, clés uniquement |
 | Protection Brute Force | Fail2ban | Bannissement IP après 3 tentatives échouées |
-| Surveillance Intégrité | inotifywait | Détecte toute modification sur les fichiers critiques |
-| Logs Centralisés | rsyslog + volume Docker | Tous les logs lisibles depuis le conteneur monitor |
+| Surveillance Intégrité | inotifywait | Détecte les modifications sur les fichiers critiques |
+| Logs Centralisés | rsyslog + volume Docker | Tous les logs lisibles depuis le monitor |
 | Monitoring Temps Réel | Netdata | Dashboard live sur port 19999 |
-| Validation CI/CD | GitHub Actions | Valide automatiquement tous les contrôles de sécurité |
-
-### Configuration SSH Durcie
-
-```
-Port 2222                    # Évite les scanners automatisés
-PermitRootLogin no           # Root ne peut pas se connecter en SSH
-MaxAuthTries 3               # Coupe les attaques brute force
-LoginGraceTime 30            # Pas d'attaques lentes ou inactives
-PasswordAuthentication no    # Clés uniquement
-AllowTcpForwarding no        # Pas de tunneling de trafic
-X11Forwarding no             # Pas de tunneling GUI
-LogLevel VERBOSE             # Logs complets pour forensique
-```
+| Validation CI/CD | GitHub Actions | Valide automatiquement les contrôles de sécurité |
 
 ### Résultats de Simulation d'Attaques
 
@@ -82,132 +68,142 @@ LogLevel VERBOSE             # Logs complets pour forensique
 | Brute force (3 tentatives) | Fail2ban | 🚫 IP Bannie |
 | Tentative auth par mot de passe | PasswordAuthentication no | ❌ Refusé |
 | Modification fichier critique | inotifywait | 🔔 Détecté & Journalisé |
-| Visibilité logs depuis monitor | Volume Docker partagé | ✅ Visibilité complète |
-
-### Comment Lancer la Phase 1
-
-```bash
-# Créer le réseau et le volume
-docker network create hardened-net
-docker volume create hardened-logs
-
-# Lancer le serveur durci
-docker run -d --name hardened-server \
-  --network hardened-net \
-  -p 2222:2222 \
-  -v hardened-logs:/var/log \
-  hardened-server:v1 bash
-
-# Lancer le monitor
-docker run -d --name monitor \
-  --network hardened-net \
-  -p 19999:19999 \
-  -v hardened-logs:/monitored-logs:ro \
-  netdata/netdata
-
-# Accéder au dashboard Netdata
-open http://localhost:19999
-```
 
 ---
 
-## 🔄 Phase 2 — Automatisation Ansible (En cours)
+## ✅ Phase 2 — Automatisation Ansible
 
-### Objectif
-Éliminer toute configuration manuelle. Une seule commande reconstruit l'environnement durci complet depuis zéro.
+### Ce que ça fait
 
-### Playbooks Prévus
+Une seule commande reconstruit l'environnement durci complet depuis zéro :
+
+```bash
+ansible-playbook playbooks/site.yml
+```
+
+### Rôles
 
 ```
 ansible/
-├── inventory/
-│   └── hosts.yml              # Inventaire des conteneurs
+├── inventory/hosts.yml          # Inventaire du serveur cible
+├── ansible.cfg                  # Chemin des rôles + paramètres par défaut
 ├── playbooks/
-│   ├── harden.yml             # Séquence de durcissement complète
-│   ├── deploy-fail2ban.yml    # Configuration Fail2ban
-│   ├── deploy-monitoring.yml  # Netdata + envoi de logs
-│   └── site.yml               # Playbook maître (lance tout)
+│   └── site.yml                 # Playbook maître
 └── roles/
-    ├── ssh-hardening/         # Rôle configuration SSH
-    ├── fail2ban/              # Rôle IDS
-    └── file-integrity/        # Rôle inotifywait
+    ├── ssh-hardening/           # Déploie sshd_config durci
+    ├── fail2ban/                # Installe + configure Fail2ban
+    └── file-integrity/          # Surveillance inotifywait
 ```
 
-### Commande Cible
+### Leçons Clés de la Phase 2
 
-```bash
-# Toute l'infrastructure durcie en une seule commande
-ansible-playbook -i inventory/hosts.yml playbooks/site.yml
+- **Ne jamais automatiser en root** — user `ansible` dédié avec sudo scopé
+- **Idempotence** — changed=0 à la deuxième exécution = prêt pour la production
+- **Déployer des fichiers de config complets** plutôt que de patcher ligne par ligne
+- **Les changements de port cassent la connectivité** — mettre à jour l'inventaire après durcissement SSH
+
+---
+
+## ✅ Phase 3 — SOC Home Lab
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      hardened-net                               │
+│                                                                  │
+│  ┌─────────────────┐    ┌──────────┐    ┌────────────────────┐  │
+│  │  ansible-target  │    │ promtail │    │       loki         │  │
+│  │  SSH :2222       │───►│          │───►│  agrégation logs   │  │
+│  │  Fail2ban        │    │ surveille│    └────────────────────┘  │
+│  │  inotifywait     │    │ auth.log │             │              │
+│  └─────────────────┘    └──────────┘             ▼              │
+│                                         ┌────────────────────┐  │
+│  ┌─────────────────┐                    │      grafana        │  │
+│  │    suricata      │                   │  Dashboard SOC     │  │
+│  │  48 716 règles   │                   │  port 3000         │  │
+│  │  IDS réseau      │                   └────────────────────┘  │
+│  └─────────────────┘                                            │
+│  volume partagé: hardened-logs                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Pipeline de Logs
+
+```
+ansible-target → /var/log/auth.log → promtail → loki → grafana
+```
+
+### Stack SOC
+
+| Outil | Rôle | Port |
+|---|---|---|
+| Loki | Agrégation de logs | 3100 |
+| Grafana | Dashboard SOC | 3000 |
+| Promtail | Agent d'envoi de logs | 9080 |
+| Suricata | IDS réseau (48 716 règles ET/Open) | — |
+
+### Requêtes Dashboard Grafana
+
+```
+# Flux de logs en direct
+{job="hardened-server"}
+
+# Connexions échouées par minute
+count_over_time({job="hardened-server"} |= "Failed" [1m])
+
+# Bannissements Fail2ban
+{job="hardened-server"} |= "Ban"
+```
+
+### Décision d'Architecture — Tap Réseau Suricata
+
+Suricata a été déployé avec 48 716 règles ET/Open chargées et fonctionne correctement sur eth0. Dans un réseau bridge Docker, le trafic inter-conteneurs est traité au niveau du kernel bridge Linux — en dessous de l'interface surveillée par Suricata.
+
+**Solution en production :** Suricata tourne sur l'interface réseau de l'hôte ou sur un tap macvlan dédié. Prévu pour la Phase 4 sur AWS EC2 où le contrôle réseau complet est disponible.
+
+> Documenter cette contrainte démontre une compréhension de l'architecture réseau au-delà de la configuration superficielle.
+
+### Comment Lancer la Phase 3
+
+```powershell
+# Loki
+docker run -d --name loki --network hardened-net -p 3100:3100 grafana/loki:latest
+
+# Grafana
+docker run -d --name grafana --network hardened-net -p 3000:3000 grafana/grafana:latest
+
+# Promtail
+docker run -d --name promtail `
+  --network hardened-net `
+  -v hardened-logs:/var/log/hardened:ro `
+  -v ./promtail-config.yml:/etc/promtail/config.yml `
+  grafana/promtail:latest
+
+# Suricata
+docker run -d --name suricata `
+  --network hardened-net `
+  --cap-add NET_ADMIN --cap-add NET_RAW `
+  -v hardened-logs:/var/log/suricata `
+  jasonish/suricata:latest -i eth0
+
+# Charger les règles
+docker exec suricata suricata-update enable-source et/open
+docker exec suricata suricata-update
 ```
 
 ---
 
-## ⏳ Phase 3 — SOC Home Lab
+## ⏳ Phase 4 — Red Team Lab (AWS)
 
-### Objectif
-Ajouter une stack SOC complète par-dessus l'infrastructure durcie — détection de menaces en temps réel, corrélation d'alertes et couverture MITRE ATT&CK.
+### Pourquoi AWS
 
-### Architecture Prévue
-
-```
-┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
-│  hardened-server │    │   suricata-ids   │    │   elk-stack      │
-│  (Phase 1)       │───►│  IDS/IPS Réseau  │───►│  Elasticsearch   │
-│                  │    │  Règles MITRE    │    │  Logstash        │
-│                  │    │  ATT&CK          │    │  Kibana          │
-└──────────────────┘    └──────────────────┘    └──────────────────┘
-                                                         │
-                                               ┌──────────────────┐
-                                               │  moteur-alertes  │
-                                               │  Threat hunting  │
-                                               │  Dashboard SOC   │
-                                               └──────────────────┘
-```
-
-### Stack Prévu
-
-| Outil | Rôle |
-|---|---|
-| Suricata | IDS/IPS réseau avec règles MITRE ATT&CK |
-| Elasticsearch | Stockage et indexation des logs |
-| Logstash | Pipeline d'ingestion et de parsing |
-| Kibana | Dashboard SOC et visualisation |
-| Règles custom | Mappées sur le framework MITRE ATT&CK |
-
----
-
-## ⏳ Phase 4 — Red Team Lab
-
-### Objectif
-Construire un environnement isolé de simulation d'attaques pour tester les défenses, comprendre les techniques des attaquants et générer de vraies alertes dans le SOC.
-
-### Architecture Prévue
-
-```
-┌─────────────────────────────────────────────────────┐
-│              RÉSEAU DE LAB ISOLÉ                     │
-│                                                      │
-│  ┌─────────────┐         ┌─────────────────────┐    │
-│  │  kali-linux │────────►│   hardened-server   │    │
-│  │  attaquant  │         │  (cible/défenseur)  │    │
-│  └─────────────┘         └─────────────────────┘    │
-│         │                          │                 │
-│         │              ┌───────────────────────┐     │
-│         └─────────────►│     Stack SOC         │     │
-│                        │  (Phase 3 — monitor)  │     │
-│                        └───────────────────────┘     │
-└─────────────────────────────────────────────────────┘
-```
-
-### Scénarios d'Attaques Prévus
-
-- Reconnaissance — scan nmap, énumération de services
-- Brute force — attaques SSH, déclenchement Fail2ban
-- Tentatives d'élévation de privilèges — surveillées par inotifywait
-- Simulation de mouvement latéral — pivoting réseau
-- Toutes les attaques visibles en temps réel sur le dashboard SOC
-
-> ⚠️ Toutes les attaques sont réalisées exclusivement dans cet environnement de lab isolé, sur une infrastructure que je possède et contrôle.
+Le réseau Docker local limite l'inspection complète du trafic réseau. La Phase 4 passe sur AWS EC2 où :
+- Accès complet au kernel pour l'interface tap Suricata
+- Terraform provisionne tout de manière reproductible
+- Kali Linux attaquant avec capacités complètes
+- Simulation MITRE ATT&CK (T1021, T1046, T1190)
+- Toutes les alertes visibles en temps réel sur le dashboard Grafana
 
 ---
 
@@ -215,43 +211,52 @@ Construire un environnement isolé de simulation d'attaques pour tester les déf
 
 ```
 hardened-infra/
-├── .github/
-│   └── workflows/
-│       └── ci.yml                  # Pipeline GitHub Actions
+├── .github/workflows/ci.yml
 ├── hardened-server/
-│   ├── Dockerfile                  # Image Ubuntu durcie
-│   ├── sshd_config                 # Configuration SSH durcie
-│   ├── fail2ban-jail.local         # Configuration Fail2ban
-│   └── scripts/
-│       └── start.sh                # Script de démarrage conteneur
-├── docs/
-│   ├── hardening-steps.md          # Étapes détaillées avec obstacles réels
-│   └── attack-simulation.md       # Résultats des tests d'attaques live
-└── README.md
+│   ├── Dockerfile
+│   ├── sshd_config
+│   ├── fail2ban-jail.local
+│   └── scripts/start.sh
+├── ansible/
+│   ├── ansible.cfg
+│   ├── inventory/hosts.yml
+│   ├── playbooks/site.yml
+│   └── roles/
+│       ├── ssh-hardening/
+│       ├── fail2ban/
+│       └── file-integrity/
+├── promtail-config.yml
+└── docs/
+    ├── hardening-steps.md
+    ├── attack-simulation.md
+    ├── soc-lab.md
+    └── soc-lab-fr.md
 ```
 
 ---
 
 ## 📚 Documentation
 
-- [Étapes de Durcissement & Leçons Apprises](docs/hardening-steps.md) — chaque obstacle rencontré et comment il a été résolu
-- [Résultats de Simulation d'Attaques](docs/attack-simulation.md) — tests brute force live et réponses de l'IDS
+- [Étapes de Durcissement & Leçons Apprises](docs/hardening-steps.md)
+- [Résultats de Simulation d'Attaques](docs/attack-simulation.md)
+- [Guide Complet SOC Lab](docs/soc-lab-fr.md)
 
 ---
 
-## 🧠 Leçons Clés Apprises
+## 🧠 Leçons Clés
 
-1. **Les conteneurs ne sont pas des VMs** — auditd, systemd, les modules kernel se comportent différemment. Connaître son environnement est essentiel.
-2. **Les logs sont tout** — Fail2ban est inutile sans une infrastructure de logs fonctionnelle.
-3. **Toujours vérifier avec netstat** — ne pas supposer qu'un service est sécurisé, vérifier ce qui écoute réellement.
-4. **Tester le durcissement** — essayer activement de pénétrer et vérifier que chaque contrôle fonctionne.
-5. **Les obstacles sont de la documentation** — chaque mur rencontré prouve une expérience pratique réelle.
+1. **Les conteneurs ≠ VMs** — les modules kernel se comportent différemment
+2. **Les logs sont tout** — Fail2ban est inutile sans infrastructure de logs
+3. **Ne jamais automatiser en root** — comptes de service dédiés avec sudo scopé
+4. **L'idempotence est essentielle** — changed=0 à chaque fois = prêt pour la production
+5. **L'architecture réseau est critique** — le bridge Docker limite l'inspection de paquets
+6. **Documenter les obstacles** — chaque mur rencontré prouve une expérience réelle
 
 ---
 
 ## 🛠️ Stack Technique
 
-`Docker` `Ubuntu 22.04` `Fail2ban` `Netdata` `rsyslog` `inotifywait` `GitHub Actions` `Ansible (Phase 2)` `Suricata (Phase 3)` `ELK Stack (Phase 3)` `Kali Linux (Phase 4)`
+`Docker` `Ubuntu 22.04` `Fail2ban` `Netdata` `rsyslog` `inotifywait` `GitHub Actions` `Ansible` `Suricata` `Loki` `Grafana` `Promtail`
 
 ---
 
@@ -260,4 +265,4 @@ hardened-infra/
 **Khalil Ghiati** — Ingénieur Infrastructure & Sécurité
 
 [![GitHub](https://img.shields.io/badge/GitHub-Khalil--secure-181717?logo=github)](https://github.com/Khalil-secure)
-[![Portfolio](https://img.shields.io/badge/Portfolio-khalilghiati.dev-0F4C81)](https://portfolio-khalil-secure.vercel.app/)
+[![Portfolio](https://img.shields.io/badge/Portfolio-khalilghiati.dev-0F4C81)](https://khalilghiati.dev)
